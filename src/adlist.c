@@ -52,10 +52,8 @@ list *listCreate(void)
     return list;
 }
 
-/* Free the whole list.
- *
- * This function can't fail. */
-void listRelease(list *list)
+/* Remove all the elements from the list without destroying the list itself. */
+void listEmpty(list *list)
 {
     unsigned long len;
     listNode *current, *next;
@@ -68,6 +66,16 @@ void listRelease(list *list)
         zfree(current);
         current = next;
     }
+    list->head = list->tail = NULL;
+    list->len = 0;
+}
+
+/* Free the whole list.
+ *
+ * This function can't fail. */
+void listRelease(list *list)
+{
+    listEmpty(list);
     zfree(list);
 }
 
@@ -242,7 +250,7 @@ listNode *listNext(listIter *iter)
 list *listDup(list *orig)
 {
     list *copy;
-    listIter *iter;
+    listIter iter;
     listNode *node;
 
     if ((copy = listCreate()) == NULL)
@@ -250,26 +258,23 @@ list *listDup(list *orig)
     copy->dup = orig->dup;
     copy->free = orig->free;
     copy->match = orig->match;
-    iter = listGetIterator(orig, AL_START_HEAD);
-    while((node = listNext(iter)) != NULL) {
+    listRewind(orig, &iter);
+    while((node = listNext(&iter)) != NULL) {
         void *value;
 
         if (copy->dup) {
             value = copy->dup(node->value);
             if (value == NULL) {
                 listRelease(copy);
-                listReleaseIterator(iter);
                 return NULL;
             }
         } else
             value = node->value;
         if (listAddNodeTail(copy, value) == NULL) {
             listRelease(copy);
-            listReleaseIterator(iter);
             return NULL;
         }
     }
-    listReleaseIterator(iter);
     return copy;
 }
 
@@ -284,24 +289,21 @@ list *listDup(list *orig)
  * NULL is returned. */
 listNode *listSearchKey(list *list, void *key)
 {
-    listIter *iter;
+    listIter iter;
     listNode *node;
 
-    iter = listGetIterator(list, AL_START_HEAD);
-    while((node = listNext(iter)) != NULL) {
+    listRewind(list, &iter);
+    while((node = listNext(&iter)) != NULL) {
         if (list->match) {
             if (list->match(node->value, key)) {
-                listReleaseIterator(iter);
                 return node;
             }
         } else {
             if (key == node->value) {
-                listReleaseIterator(iter);
                 return node;
             }
         }
     }
-    listReleaseIterator(iter);
     return NULL;
 }
 
@@ -325,12 +327,11 @@ listNode *listIndex(list *list, long index) {
 }
 
 /* Rotate the list removing the tail node and inserting it to the head. */
-void listRotate(list *list) {
-    listNode *tail = list->tail;
-
+void listRotateTailToHead(list *list) {
     if (listLength(list) <= 1) return;
 
     /* Detach current tail */
+    listNode *tail = list->tail;
     list->tail = tail->prev;
     list->tail->next = NULL;
     /* Move it as head */
@@ -338,4 +339,38 @@ void listRotate(list *list) {
     tail->prev = NULL;
     tail->next = list->head;
     list->head = tail;
+}
+
+/* Rotate the list removing the head node and inserting it to the tail. */
+void listRotateHeadToTail(list *list) {
+    if (listLength(list) <= 1) return;
+
+    listNode *head = list->head;
+    /* Detach current head */
+    list->head = head->next;
+    list->head->prev = NULL;
+    /* Move it as tail */
+    list->tail->next = head;
+    head->next = NULL;
+    head->prev = list->tail;
+    list->tail = head;
+}
+
+/* Add all the elements of the list 'o' at the end of the
+ * list 'l'. The list 'other' remains empty but otherwise valid. */
+void listJoin(list *l, list *o) {
+    if (o->head)
+        o->head->prev = l->tail;
+
+    if (l->tail)
+        l->tail->next = o->head;
+    else
+        l->head = o->head;
+
+    if (o->tail) l->tail = o->tail;
+    l->len += o->len;
+
+    /* Setup other as an empty list. */
+    o->head = o->tail = NULL;
+    o->len = 0;
 }

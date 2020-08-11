@@ -91,6 +91,53 @@ proc wait_for_sync r {
     }
 }
 
+proc wait_for_ofs_sync {r1 r2} {
+    wait_for_condition 50 100 {
+        [status $r1 master_repl_offset] eq [status $r2 master_repl_offset]
+    } else {
+        fail "replica didn't sync in time"
+    }
+}
+
+# count current log lines in server's stdout
+proc count_log_lines {srv_idx} {
+    set _ [exec wc -l < [srv $srv_idx stdout]]
+}
+
+# verify pattern exists in server's sdtout after a certain line number
+proc verify_log_message {srv_idx pattern from_line} {
+    incr from_line
+    set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
+    if {![string match $pattern $result]} {
+        error "assertion:expected message not found in log file: $pattern"
+    }
+}
+
+# wait for pattern to be found in server's stdout after certain line number
+# return value is a list containing the line that matched the pattern and the line number
+proc wait_for_log_messages {srv_idx patterns from_line maxtries delay} {
+    set retry $maxtries
+    set next_line [expr $from_line + 1] ;# searching form the line after
+    set stdout [srv $srv_idx stdout]
+    while {$retry} {
+        set result [exec tail -n +$next_line < $stdout]
+        set result [split $result "\n"]
+        foreach line $result {
+            foreach pattern $patterns {
+                if {[string match $pattern $line]} {
+                    return [list $line $next_line]
+                }
+            }
+            incr next_line
+        }
+        incr retry -1
+        after $delay
+    }
+    if {$retry == 0} {
+        fail "log message of '$patterns' not found in $stdout after line: $from_line till line: [expr $next_line -1]"
+    }
+}
+
 # Random integer between 0 and max (excluded).
 proc randomInt {max} {
     expr {int(rand()*$max)}
@@ -262,46 +309,50 @@ proc formatCommand {args} {
 
 proc csvdump r {
     set o {}
-    foreach k [lsort [{*}$r keys *]] {
-        set type [{*}$r type $k]
-        append o [csvstring $k] , [csvstring $type] ,
-        switch $type {
-            string {
-                append o [csvstring [{*}$r get $k]] "\n"
-            }
-            list {
-                foreach e [{*}$r lrange $k 0 -1] {
-                    append o [csvstring $e] ,
+    for {set db 0} {$db < 16} {incr db} {
+        {*}$r select $db
+        foreach k [lsort [{*}$r keys *]] {
+            set type [{*}$r type $k]
+            append o [csvstring $db] , [csvstring $k] , [csvstring $type] ,
+            switch $type {
+                string {
+                    append o [csvstring [{*}$r get $k]] "\n"
                 }
-                append o "\n"
-            }
-            set {
-                foreach e [lsort [{*}$r smembers $k]] {
-                    append o [csvstring $e] ,
+                list {
+                    foreach e [{*}$r lrange $k 0 -1] {
+                        append o [csvstring $e] ,
+                    }
+                    append o "\n"
                 }
-                append o "\n"
-            }
-            zset {
-                foreach e [{*}$r zrange $k 0 -1 withscores] {
-                    append o [csvstring $e] ,
+                set {
+                    foreach e [lsort [{*}$r smembers $k]] {
+                        append o [csvstring $e] ,
+                    }
+                    append o "\n"
                 }
-                append o "\n"
-            }
-            hash {
-                set fields [{*}$r hgetall $k]
-                set newfields {}
-                foreach {k v} $fields {
-                    lappend newfields [list $k $v]
+                zset {
+                    foreach e [{*}$r zrange $k 0 -1 withscores] {
+                        append o [csvstring $e] ,
+                    }
+                    append o "\n"
                 }
-                set fields [lsort -index 0 $newfields]
-                foreach kv $fields {
-                    append o [csvstring [lindex $kv 0]] ,
-                    append o [csvstring [lindex $kv 1]] ,
+                hash {
+                    set fields [{*}$r hgetall $k]
+                    set newfields {}
+                    foreach {k v} $fields {
+                        lappend newfields [list $k $v]
+                    }
+                    set fields [lsort -index 0 $newfields]
+                    foreach kv $fields {
+                        append o [csvstring [lindex $kv 0]] ,
+                        append o [csvstring [lindex $kv 1]] ,
+                    }
+                    append o "\n"
                 }
-                append o "\n"
             }
         }
     }
+    {*}$r select 9
     return $o
 }
 
@@ -313,21 +364,26 @@ proc roundFloat f {
     format "%.10g" $f
 }
 
-proc find_available_port start {
-    for {set j $start} {$j < $start+1024} {incr j} {
-        if {[catch {set fd1 [socket 127.0.0.1 $j]}] &&
-            [catch {set fd2 [socket 127.0.0.1 [expr $j+10000]]}]} {
-            return $j
+set ::last_port_attempted 0
+proc find_available_port {start count} {
+    set port [expr $::last_port_attempted + 1]
+    for {set attempts 0} {$attempts < $count} {incr attempts} {
+        if {$port < $start || $port >= $start+$count} {
+            set port $start
+        }
+        if {[catch {set fd1 [socket 127.0.0.1 $port]}] &&
+            [catch {set fd2 [socket 127.0.0.1 [expr $port+10000]]}]} {
+            set ::last_port_attempted $port
+            return $port
         } else {
             catch {
                 close $fd1
                 close $fd2
             }
         }
+        incr port
     }
-    if {$j == $start+1024} {
-        error "Can't find a non busy port in the $start-[expr {$start+1023}] range."
-    }
+    error "Can't find a non busy port in the $start-[expr {$start+$count-1}] range."
 }
 
 # Test if TERM looks like to support colors
@@ -364,10 +420,38 @@ proc colorstr {color str} {
 # of seconds to the specified Redis instance.
 proc start_write_load {host port seconds} {
     set tclsh [info nameofexecutable]
-    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds &
+    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds $::tls &
 }
 
 # Stop a process generating write load executed with start_write_load.
 proc stop_write_load {handle} {
+    catch {exec /bin/kill -9 $handle}
+}
+
+proc K { x y } { set x } 
+
+# Shuffle a list. From Tcl wiki. Originally from Steve Cohen that improved
+# other versions. Code should be under public domain.
+proc lshuffle {list} {
+    set n [llength $list]
+    while {$n>0} {
+        set j [expr {int(rand()*$n)}]
+        lappend slist [lindex $list $j]
+        incr n -1
+        set temp [lindex $list $n]
+        set list [lreplace [K $list [set list {}]] $j $j $temp]
+    }
+    return $slist
+}
+
+# Execute a background process writing complex data for the specified number
+# of ops to the specified Redis instance.
+proc start_bg_complex_data {host port db ops} {
+    set tclsh [info nameofexecutable]
+    exec $tclsh tests/helpers/bg_complex_data.tcl $host $port $db $ops $::tls &
+}
+
+# Stop a process generating write load executed with start_bg_complex_data.
+proc stop_bg_complex_data {handle} {
     catch {exec /bin/kill -9 $handle}
 }

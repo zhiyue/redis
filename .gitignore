@@ -1,9 +1,13 @@
 .*.swp
 *.o
+*.xo
+*.so
+*.d
 *.log
 dump.rdb
 redis-benchmark
 redis-check-aof
+redis-check-rdb
 redis-check-dump
 redis-cli
 redis-sentinel
@@ -26,3 +30,6 @@ deps/lua/src/liblua.a
 .make-*
 .prerequisites
 *.dSYM
+Makefile.dep
+.vscode/*
+.idea/*

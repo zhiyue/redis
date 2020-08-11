@@ -31,6 +31,8 @@
 #ifndef ANET_H
 #define ANET_H
 
+#include <sys/types.h>
+
 #define ANET_OK 0
 #define ANET_ERR -1
 #define ANET_ERR_LEN 256
@@ -47,11 +49,12 @@
 #undef ip_len
 #endif
 
-int anetTcpConnect(char *err, char *addr, int port);
-int anetTcpNonBlockConnect(char *err, char *addr, int port);
-int anetTcpNonBlockBindConnect(char *err, char *addr, int port, char *source_addr);
-int anetUnixConnect(char *err, char *path);
-int anetUnixNonBlockConnect(char *err, char *path);
+int anetTcpConnect(char *err, const char *addr, int port);
+int anetTcpNonBlockConnect(char *err, const char *addr, int port);
+int anetTcpNonBlockBindConnect(char *err, const char *addr, int port, const char *source_addr);
+int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, const char *source_addr);
+int anetUnixConnect(char *err, const char *path);
+int anetUnixNonBlockConnect(char *err, const char *path);
 int anetRead(int fd, char *buf, int count);
 int anetResolve(char *err, char *host, char *ipbuf, size_t ipbuf_len);
 int anetResolveIP(char *err, char *host, char *ipbuf, size_t ipbuf_len);
@@ -67,8 +70,12 @@ int anetEnableTcpNoDelay(char *err, int fd);
 int anetDisableTcpNoDelay(char *err, int fd);
 int anetTcpKeepAlive(char *err, int fd);
 int anetSendTimeout(char *err, int fd, long long ms);
+int anetRecvTimeout(char *err, int fd, long long ms);
 int anetPeerToString(int fd, char *ip, size_t ip_len, int *port);
 int anetKeepAlive(char *err, int fd, int interval);
 int anetSockName(int fd, char *ip, size_t ip_len, int *port);
+int anetFormatAddr(char *fmt, size_t fmt_len, char *ip, int port);
+int anetFormatPeer(int fd, char *fmt, size_t fmt_len);
+int anetFormatSock(int fd, char *fmt, size_t fmt_len);
 
 #endif

@@ -8,6 +8,7 @@ source ../instances.tcl
 source ../../support/cluster.tcl ; # Redis Cluster client.
 
 set ::instances_count 20 ; # How many instances we use at max.
+set ::tlsdir "../../tls"
 
 proc main {} {
     parse_options
@@ -17,10 +18,12 @@ proc main {} {
     }
     run_tests
     cleanup
+    end_tests
 }
 
 if {[catch main e]} {
     puts $::errorInfo
+    if {$::pause_on_error} pause_on_error
     cleanup
     exit 1
 }

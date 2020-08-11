@@ -34,6 +34,11 @@
 #include <AvailabilityMacros.h>
 #endif
 
+#ifdef __linux__
+#include <linux/version.h>
+#include <features.h>
+#endif
+
 /* Define redis_fstat to fstat or fstat64() */
 #if defined(__APPLE__) && !defined(MAC_OS_X_VERSION_10_6)
 #define redis_fstat fstat64
@@ -57,8 +62,15 @@
 #endif
 
 /* Test for backtrace() */
-#if defined(__APPLE__) || defined(__linux__)
+#if defined(__APPLE__) || (defined(__linux__) && defined(__GLIBC__)) || \
+    defined(__FreeBSD__) || (defined(__OpenBSD__) && defined(USE_BACKTRACE))\
+ || defined(__DragonFly__)
 #define HAVE_BACKTRACE 1
+#endif
+
+/* MSG_NOSIGNAL. */
+#ifdef __linux__
+#define HAVE_MSG_NOSIGNAL 1
 #endif
 
 /* Test for polling API */
@@ -77,18 +89,16 @@
 #endif
 #endif
 
-/* Define aof_fsync to fdatasync() in Linux and fsync() for all the rest */
+/* Define redis_fsync to fdatasync() in Linux and fsync() for all the rest */
 #ifdef __linux__
-#define aof_fsync fdatasync
+#define redis_fsync fdatasync
 #else
-#define aof_fsync fsync
+#define redis_fsync fsync
 #endif
 
 /* Define rdb_fsync_range to sync_file_range() on Linux, otherwise we use
  * the plain fsync() call. */
 #ifdef __linux__
-#include <linux/version.h>
-#include <features.h>
 #if defined(__GLIBC__) && defined(__GLIBC_PREREQ)
 #if (LINUX_VERSION_CODE >= 0x020611 && __GLIBC_PREREQ(2, 6))
 #define HAVE_SYNC_FILE_RANGE 1
@@ -113,7 +123,7 @@
 #define USE_SETPROCTITLE
 #endif
 
-#if (defined __linux || defined __APPLE__)
+#if ((defined __linux && defined(__GLIBC__)) || defined __APPLE__)
 #define USE_SETPROCTITLE
 #define INIT_SETPROCTITLE_REPLACEMENT
 void spt_init(int argc, char *argv[]);
@@ -196,6 +206,51 @@ void setproctitle(const char *fmt, ...);
 #define HAVE_ATOMIC
 #endif
 #endif
+#endif
+
+/* Make sure we can test for ARM just checking for __arm__, since sometimes
+ * __arm is defined but __arm__ is not. */
+#if defined(__arm) && !defined(__arm__)
+#define __arm__
+#endif
+#if defined (__aarch64__) && !defined(__arm64__)
+#define __arm64__
+#endif
+
+/* Make sure we can test for SPARC just checking for __sparc__. */
+#if defined(__sparc) && !defined(__sparc__)
+#define __sparc__
+#endif
+
+#if defined(__sparc__) || defined(__arm__)
+#define USE_ALIGNED_ACCESS
+#endif
+
+/* Define for redis_set_thread_title */
+#ifdef __linux__
+#define redis_set_thread_title(name) pthread_setname_np(pthread_self(), name)
+#else
+#if (defined __FreeBSD__ || defined __OpenBSD__)
+#include <pthread_np.h>
+#define redis_set_thread_title(name) pthread_set_name_np(pthread_self(), name)
+#elif defined __NetBSD__
+#include <pthread.h>
+#define redis_set_thread_title(name) pthread_setname_np(pthread_self(), name, NULL)
+#else
+#if (defined __APPLE__ && defined(MAC_OS_X_VERSION_10_7))
+int pthread_setname_np(const char *name);
+#include <pthread.h>
+#define redis_set_thread_title(name) pthread_setname_np(name)
+#else
+#define redis_set_thread_title(name)
+#endif
+#endif
+#endif
+
+/* Check if we can use setcpuaffinity(). */
+#if (defined __linux || defined __NetBSD__ || defined __FreeBSD__)
+#define USE_SETCPUAFFINITY
+void setcpuaffinity(const char *cpulist);
 #endif
 
 #endif
