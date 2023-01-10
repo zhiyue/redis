@@ -30,7 +30,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "redis.h"
+#include "server.h"
 
 #include <math.h>
 
@@ -49,7 +49,7 @@ static int label_margin_top = 1;
  * sparklineSequenceAddSample(seq, 10, NULL);
  * sparklineSequenceAddSample(seq, 20, NULL);
  * sparklineSequenceAddSample(seq, 30, "last sample label");
- * sds output = sparklineRender(seq, 80, 4);
+ * sds output = sparklineRender(sdsempty(), seq, 80, 4, SPARKLINE_FILL);
  * freeSparklineSequence(seq);
  * ------------------------------------------------------------------------- */
 
@@ -63,6 +63,7 @@ struct sequence *createSparklineSequence(void) {
 
 /* Add a new sample into a sequence. */
 void sparklineSequenceAddSample(struct sequence *seq, double value, char *label) {
+    label = (label == NULL || label[0] == '\0') ? NULL : zstrdup(label);
     if (seq->length == 0) {
         seq->min = seq->max = value;
     } else {
@@ -91,7 +92,7 @@ void freeSparklineSequence(struct sequence *seq) {
  * ------------------------------------------------------------------------- */
 
 /* Render part of a sequence, so that render_sequence() call call this function
- * with differnent parts in order to create the full output without overflowing
+ * with different parts in order to create the full output without overflowing
  * the current terminal columns. */
 sds sparklineRenderRange(sds output, struct sequence *seq, int rows, int offset, int len, int flags) {
     int j;

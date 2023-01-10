@@ -34,6 +34,7 @@
 
 #if defined(__linux__)
 #define _GNU_SOURCE
+#define _DEFAULT_SOURCE
 #endif
 
 #if defined(_AIX)
@@ -56,5 +57,10 @@
 
 #define _LARGEFILE_SOURCE
 #define _FILE_OFFSET_BITS 64
+
+#ifdef __linux__
+/* features.h uses the defines above to set feature specific defines.  */
+#include <features.h>
+#endif
 
 #endif

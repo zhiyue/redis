@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Marc Alexander Lehmann <schmorp@schmorp.de>
+ * Copyright (c) 2000-2010 Marc Alexander Lehmann <schmorp@schmorp.de>
  *
  * Redistribution and use in source and binary forms, with or without modifica-
  * tion, are permitted provided that the following conditions are met:
@@ -40,8 +40,8 @@
 
 /*
  * don't play with this unless you benchmark!
- * decompression is not dependent on the hash function
- * the hashing function might seem strange, just believe me
+ * the data format is not dependent on the hash function.
+ * the hash function might seem strange, just believe me,
  * it works ;)
  */
 #ifndef FRST
@@ -86,18 +86,28 @@
 #define expect_false(expr) expect ((expr) != 0, 0)
 #define expect_true(expr)  expect ((expr) != 0, 1)
 
+#if defined(__has_attribute)
+# if __has_attribute(no_sanitize)
+#  define NO_SANITIZE(sanitizer) __attribute__((no_sanitize(sanitizer)))
+# endif
+#endif
+
+#if !defined(NO_SANITIZE)
+# define NO_SANITIZE(sanitizer)
+#endif
+
 /*
  * compressed format
  *
- * 000LLLLL <L+1>    ; literal
- * LLLooooo oooooooo ; backref L
- * 111ooooo LLLLLLLL oooooooo ; backref L+7
+ * 000LLLLL <L+1>    ; literal, L+1=1..33 octets
+ * LLLooooo oooooooo ; backref L+1=1..7 octets, o+1=1..4096 offset
+ * 111ooooo LLLLLLLL oooooooo ; backref L+8 octets, o+1=1..4096 offset
  *
  */
-
-unsigned int
-lzf_compress (const void *const in_data, unsigned int in_len,
-	      void *out_data, unsigned int out_len
+NO_SANITIZE("alignment")
+size_t
+lzf_compress (const void *const in_data, size_t in_len,
+	      void *out_data, size_t out_len
 #if LZF_STATE_ARG
               , LZF_STATE htab
 #endif
@@ -106,7 +116,6 @@ lzf_compress (const void *const in_data, unsigned int in_len,
 #if !LZF_STATE_ARG
   LZF_STATE htab;
 #endif
-  const u8 **hslot;
   const u8 *ip = (const u8 *)in_data;
         u8 *op = (u8 *)out_data;
   const u8 *in_end  = ip + in_len;
@@ -123,7 +132,7 @@ lzf_compress (const void *const in_data, unsigned int in_len,
 #if defined (WIN32) && defined (_M_X64)
   unsigned _int64 off; /* workaround for missing POSIX compliance */
 #else
-  unsigned long off;
+  size_t off;
 #endif
   unsigned int hval;
   int lit;
@@ -133,10 +142,6 @@ lzf_compress (const void *const in_data, unsigned int in_len,
 
 #if INIT_HTAB
   memset (htab, 0, sizeof (htab));
-# if 0
-  for (hslot = htab; hslot < htab + HSIZE; hslot++)
-    *hslot++ = ip;
-# endif
 #endif
 
   lit = 0; op++; /* start run */
@@ -144,37 +149,38 @@ lzf_compress (const void *const in_data, unsigned int in_len,
   hval = FRST (ip);
   while (ip < in_end - 2)
     {
+      LZF_HSLOT *hslot;
+
       hval = NEXT (hval, ip);
       hslot = htab + IDX (hval);
-      ref = *hslot; *hslot = ip;
+      ref = *hslot ? (*hslot + LZF_HSLOT_BIAS) : NULL; /* avoid applying zero offset to null pointer */
+      *hslot = ip - LZF_HSLOT_BIAS;
 
       if (1
 #if INIT_HTAB
           && ref < ip /* the next test will actually take care of this, but this is faster */
 #endif
           && (off = ip - ref - 1) < MAX_OFF
-          && ip + 4 < in_end
           && ref > (u8 *)in_data
-#if STRICT_ALIGN
-          && ref[0] == ip[0]
-          && ref[1] == ip[1]
           && ref[2] == ip[2]
+#if STRICT_ALIGN
+          && ((ref[1] << 8) | ref[0]) == ((ip[1] << 8) | ip[0])
 #else
           && *(u16 *)ref == *(u16 *)ip
-          && ref[2] == ip[2]
 #endif
         )
         {
           /* match found at *ref++ */
           unsigned int len = 2;
-          unsigned int maxlen = in_end - ip - len;
+          size_t maxlen = in_end - ip - len;
           maxlen = maxlen > MAX_REF ? MAX_REF : maxlen;
+
+          if (expect_false (op + 3 + 1 >= out_end)) /* first a faster conservative test */
+            if (op - !lit + 3 + 1 >= out_end) /* second the exact but rare test */
+              return 0;
 
           op [- lit - 1] = lit - 1; /* stop run */
           op -= !lit; /* undo run if length is zero */
-
-          if (expect_false (op + 3 + 1 >= out_end))
-            return 0;
 
           for (;;)
             {
@@ -222,6 +228,7 @@ lzf_compress (const void *const in_data, unsigned int in_len,
             }
 
           *op++ = off;
+
           lit = 0; op++; /* start run */
 
           ip += len + 1;
@@ -237,12 +244,12 @@ lzf_compress (const void *const in_data, unsigned int in_len,
           hval = FRST (ip);
 
           hval = NEXT (hval, ip);
-          htab[IDX (hval)] = ip;
+          htab[IDX (hval)] = ip - LZF_HSLOT_BIAS;
           ip++;
 
 # if VERY_FAST && !ULTRA_FAST
           hval = NEXT (hval, ip);
-          htab[IDX (hval)] = ip;
+          htab[IDX (hval)] = ip - LZF_HSLOT_BIAS;
           ip++;
 # endif
 #else
@@ -251,7 +258,7 @@ lzf_compress (const void *const in_data, unsigned int in_len,
           do
             {
               hval = NEXT (hval, ip);
-              htab[IDX (hval)] = ip;
+              htab[IDX (hval)] = ip - LZF_HSLOT_BIAS;
               ip++;
             }
           while (len--);
